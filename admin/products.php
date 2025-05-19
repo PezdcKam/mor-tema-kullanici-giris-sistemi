@@ -7,41 +7,71 @@ if (!isset($_SESSION['user_id']) || !$_SESSION['is_admin']) {
     exit;
 }
 
+// Add image column to products table if it doesn't exist
+try {
+    $conn->exec("ALTER TABLE products ADD COLUMN image_url TEXT");
+} catch(PDOException $e) {
+    // Column might already exist
+}
+
 // Handle form submissions
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'add' || $_POST['action'] === 'edit') {
         $stock_messages = $_POST['stock_messages'] ?? [];
-        // Debug: display submitted stock messages
-        error_log('Submitted stock_messages: ' . print_r($stock_messages, true));
-        // Optionally display on page for debugging (remove after fix)
-        echo '<pre>Submitted stock_messages: ' . htmlspecialchars(json_encode($stock_messages)) . '</pre>';
-
         $stock_messages_json = json_encode($stock_messages);
+        
+        // Handle image upload
+        $image_url = null;
+        
+        if (isset($_FILES['image_file']) && is_uploaded_file($_FILES['image_file']['tmp_name'])) {
+            $uploadDir = __DIR__ . '/../uploads/';
+            if (!file_exists($uploadDir)) {
+                mkdir($uploadDir, 0777, true);
+                chmod($uploadDir, 0777);
+            }
+            
+            $filename = uniqid() . '_' . basename($_FILES['image_file']['name']);
+            $targetFilePath = $uploadDir . $filename;
+            
+            if (!move_uploaded_file($_FILES['image_file']['tmp_name'], $targetFilePath)) {
+                die("<div class='bg-red-500/20 border border-red-500 text-red-200 px-4 py-3 rounded-lg mb-6'>Dosya yüklenirken bir hata oluştu. Lütfen tekrar deneyin.</div>");
+            }
+            
+            chmod($targetFilePath, 0666);
+            $image_url = '/uploads/' . $filename;
+        } elseif ($_POST['action'] === 'add') {
+            die("<div class='bg-red-500/20 border border-red-500 text-red-200 px-4 py-3 rounded-lg mb-6'>Lütfen bir resim seçin.</div>");
+        }
 
         if ($_POST['action'] === 'add') {
             $stmt = $conn->prepare("
-                INSERT INTO products (name, description, price, type, stock, stock_messages) 
-                VALUES (?, ?, ?, 'regular', ?, ?)
+                INSERT INTO products (name, description, price, type, stock, stock_messages, image_url) 
+                VALUES (?, ?, ?, 'regular', ?, ?, ?)
             ");
             $stmt->execute([
                 $_POST['name'],
                 $_POST['description'],
                 $_POST['price'],
                 $_POST['stock'],
-                $stock_messages_json
+                $stock_messages_json,
+                $image_url
             ]);
             header("Location: products.php?success=add");
-            // Debug: fetch and log saved stock_messages
-            $lastId = $conn->lastInsertId();
-            $stmtDebug = $conn->prepare("SELECT stock_messages FROM products WHERE id = ?");
-            $stmtDebug->execute([$lastId]);
-            $savedMessages = $stmtDebug->fetchColumn();
-            error_log("Saved stock_messages after insert: " . $savedMessages);
             exit;
         } else {
+            // Get current image URL before update
+            $stmt = $conn->prepare("SELECT image_url FROM products WHERE id = ?");
+            $stmt->execute([$_POST['product_id']]);
+            $current_image = $stmt->fetchColumn();
+            
+            // If no new image uploaded, keep the current one
+            if (!$image_url) {
+                $image_url = $current_image;
+            }
+            
             $stmt = $conn->prepare("
                 UPDATE products 
-                SET name = ?, description = ?, price = ?, stock = ?, stock_messages = ? 
+                SET name = ?, description = ?, price = ?, stock = ?, stock_messages = ?, image_url = ? 
                 WHERE id = ?
             ");
             $stmt->execute([
@@ -50,13 +80,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
                 $_POST['price'],
                 $_POST['stock'],
                 $stock_messages_json,
+                $image_url,
                 $_POST['product_id']
             ]);
-            // Debug: fetch and log saved stock_messages
-            $stmtDebug = $conn->prepare("SELECT stock_messages FROM products WHERE id = ?");
-            $stmtDebug->execute([$_POST['product_id']]);
-            $savedMessages = $stmtDebug->fetchColumn();
-            error_log("Saved stock_messages after update: " . $savedMessages);
             header("Location: products.php?success=edit");
             exit;
         }
@@ -142,23 +168,16 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <div class="bg-gradient-to-br from-purple-900/70 to-purple-800/60 backdrop-blur-xl rounded-xl border border-purple-600/50 p-6">
                     <div class="flex justify-between items-start mb-4">
                         <h3 class="text-xl font-semibold"><?php echo htmlspecialchars($product['name']); ?></h3>
+                        <?php if ($product['image_url']): ?>
+                            <img src="<?php echo htmlspecialchars($product['image_url']); ?>" 
+                                 alt="<?php echo htmlspecialchars($product['name']); ?>"
+                                 class="w-24 h-24 object-contain rounded-lg mb-4">
+                        <?php endif; ?>
                         <div class="flex items-center space-x-2">
-<button data-product='<?php echo json_encode($product, JSON_HEX_APOS | JSON_HEX_QUOT); ?>' onclick="openEditModalFromData(this)"
-        class="p-2 text-purple-300 hover:text-purple-100 transition">
-    <i class="fas fa-edit"></i>
-</button>
-
-<script>
-function openEditModalFromData(button) {
-    const productJson = button.getAttribute('data-product');
-    try {
-        const product = JSON.parse(productJson);
-        openEditModal(product);
-    } catch (e) {
-        console.error('Failed to parse product JSON:', e);
-    }
-}
-</script>
+                            <button onclick="openEditModal(<?php echo htmlspecialchars(json_encode($product)); ?>)"
+                                    class="p-2 text-purple-300 hover:text-purple-100 transition">
+                                <i class="fas fa-edit"></i>
+                            </button>
                             <form method="POST" class="inline" onsubmit="return confirm('Bu ürünü silmek istediğinize emin misiniz?');">
                                 <input type="hidden" name="action" value="delete">
                                 <input type="hidden" name="product_id" value="<?php echo $product['id']; ?>">
@@ -244,6 +263,18 @@ function openEditModalFromData(button) {
                                    name="name" 
                                    required
                                    class="w-full rounded-lg bg-purple-800/50 border border-purple-500 text-purple-100 placeholder-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 px-4 py-2">
+                        </div>
+
+                        <div>
+                            <label for="image_file" class="block text-sm font-medium text-purple-300 mb-2">
+                                Ürün Resmi
+                            </label>
+                            <input type="file"
+                                   id="image_file"
+                                   name="image_file"
+                                   accept="image/*"
+                                   required
+                                   class="w-full text-purple-100 bg-purple-800/50 border border-purple-500 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400">
                         </div>
 
                         <div>
@@ -346,25 +377,18 @@ function openEditModalFromData(button) {
             document.getElementById('description').value = product.description;
             document.getElementById('price').value = product.price;
             document.getElementById('stock').value = product.stock;
-
-            // Build stock messages input fields based on saved messages if available,
-            // otherwise use the stock count as a fallback.
-            let messages = [];
-            try {
-                messages = product.stock_messages ? JSON.parse(product.stock_messages) : [];
-            } catch (e) {
-                console.error('Error parsing stock messages JSON', e);
+            
+            // Load existing stock messages
+            if (product.stock_messages) {
+                const messages = JSON.parse(product.stock_messages);
+                updateStockMessages(product.stock);
+                const inputs = document.getElementsByName('stock_messages[]');
+                messages.forEach((message, index) => {
+                    if (inputs[index]) {
+                        inputs[index].value = message;
+                    }
+                });
             }
-            const count = messages.length > 0 ? messages.length : product.stock;
-            updateStockMessages(count);  // Update to create 'count' number of inputs
-
-            const inputs = document.getElementsByName('stock_messages[]');
-            messages.forEach((message, index) => {
-                if (inputs[index]) {
-                    inputs[index].value = message;
-                }
-            });
-
             document.getElementById('productModal').classList.remove('hidden');
         }
 
