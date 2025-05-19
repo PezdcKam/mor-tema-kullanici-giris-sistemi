@@ -133,7 +133,10 @@ $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <?php foreach ($products as $product): ?>
                 <div class="bg-gradient-to-br from-purple-900/70 to-purple-800/60 backdrop-blur-xl rounded-xl border border-purple-600/50 p-6">
-                    <h3 class="text-xl font-semibold mb-2"><?php echo htmlspecialchars($product['name']); ?></h3>
+            <h3 class="text-xl font-semibold mb-2"><?php echo htmlspecialchars($product['name']); ?></h3>
+            <?php if ($product['image_url']): ?>
+                <img src="<?php echo htmlspecialchars($product['image_url']); ?>" alt="<?php echo htmlspecialchars($product['name']); ?>" class="w-full h-48 object-cover rounded-lg mb-4">
+            <?php endif; ?>
                     <p class="text-purple-300 mb-4"><?php echo htmlspecialchars($product['description']); ?></p>
                     <div class="flex items-center justify-between space-x-4">
                         <div>
